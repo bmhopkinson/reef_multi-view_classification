@@ -6,7 +6,7 @@ Hopkinson, B. M., A. C. King, D. P. Owen, M. Johnson-Roberson, M. H. Long, S. M.
 
 ![Multiview](doc/multiview.jpg)
 
-#nViewNet Training
+# nViewNet Training
 1. CNN model training and testing scripts are in the "training_testing" folder.
 A small sample data set is provided. To begin training ResNet152 run 'train_on_mesh.py" setting parameters as described in the documentation of this file.
 
