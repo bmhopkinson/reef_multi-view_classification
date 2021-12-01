@@ -1,16 +1,13 @@
 import os
-import time
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim import lr_scheduler
 import torchvision
-from meshtrain_dataset import MeshTrainDataset, MeshTrainDataset_RNN
+from meshtrain_dataset import MeshTrainDataset, collate_fn_padimg
 from nviewnet_v2 import nViewNet_RNN, nViewNet
 from rn152 import RN152
-from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from helper import count_parameters
 import itertools
@@ -56,7 +53,7 @@ n_views = 8  # set to 8 for nViewNet-8, 4 for nViewNet-4, etc
 
 
 # HyperParameters
-batchsize_top = 32
+batchsize_top = 16
 batchsize_all = 16
 epochs_top = 50# number of epochs to train the top of the model
 epochs_all = 0 # number of epochs to train the entire model - nViewNet => 0
@@ -70,8 +67,8 @@ lr_all = 1e-5 # learning rate to use when training the entire model
 #val_infile  = 'val_infile_ML_215.txt'
 train_infile = './infiles/train_infile_20190503_small.txt'
 val_infile   = './infiles/val_infile_20190503_small.txt'
-#train_infile = './infiles/train_infile_20190503_noG4.txt'
-#val_infile   = './infiles/val_infile_20190503_noG4.txt'
+#train_infile = './infiles/train_infile_RProd.txt'
+#val_infile   = './infiles/val_infile_RProd.txt'
 #
 # Print Configs
 
@@ -107,31 +104,6 @@ if use_gpu:
     device = torch.device("cuda")
 else:
     device = torch.device("cpu")
-
-def collate_fn_padimg(data):
-    #{'X': np_series, 'Y': ann, 'elm': elm, 'img_fnames': img_fnames, 'len': len(image_series)}
-    batch_size = len(data)
-
-    anns = torch.tensor([x['Y'] for x in data], dtype=torch.long)
-    elms = torch.tensor([x['elm'] for x in data], dtype=torch.long)
-    img_fnames = [x['img_fnames'] for x in data]
-    img_fnames = [list(x) for x in itertools.zip_longest(*img_fnames)]
-
-    lens = [x['len'] for x in data]
-    max_len = max(lens)
-    lens = torch.tensor(lens, dtype=torch.long)
-
-    #setup image
-    img_sample = data[0]['X']
-    _, c, w, h = img_sample.shape
-    imgs = torch.zeros(batch_size, max_len, c, w, h)  #zero-padded, merged image series
-    for i, datum in enumerate(data):
-        img = datum['X']
-        n_elms = datum['len']
-        imgs[i, 0:n_elms, :, :, :] = torch.from_numpy(img)
-
-    return {'X': imgs, 'Y': anns, 'elm': elms, 'img_fnames': img_fnames, 'len': lens}
-
 
 #
 # Data Loaders and Datasets
@@ -174,7 +146,6 @@ def setup_model():
 log_file = open("train_on_mesh_v3_logfile.txt","w")
 # mimic structre of train_model() function here: https://pytorch.org/tutorials/beginner/transfer_learning_tutorial.html
 def train(model, dataloaders, criterion, optimizer, num_epochs, scheduler = lr_scheduler, best_acc=0):
-    first_pass = True
     for epoch in range(num_epochs):
         for phase in ['train', 'val']:
             if phase == 'train':
@@ -196,11 +167,6 @@ def train(model, dataloaders, criterion, optimizer, num_epochs, scheduler = lr_s
                     data = (image_series, batch['len'].to(device))
                 else:
                     data = image_series
-
-                if first_pass:
-                    print('first pass: target: {}'.format(target))
-                    print('img_files: {}'.format(batch['img_fnames']))
-                    first_pass = False
 
                 optimizer.zero_grad()
 
@@ -239,17 +205,17 @@ if __name__ == "__main__":
 
 
     if model_to_train == "nViewNet_RNN":
-        train_data = MeshTrainDataset_RNN(train_infile,  ann_ones_based=True)
-        val_data = MeshTrainDataset_RNN(val_infile, ann_ones_based=True)
+        train_data = MeshTrainDataset(train_infile,  ann_ones_based=True, RNN=True)
+        val_data = MeshTrainDataset(val_infile, ann_ones_based=True, RNN=True)
 
     else:
         if model_to_train == "ResNet152":
             n_views = 1
-        train_data = MeshTrainDataset(train_infile, nview_len=n_views, ann_ones_based=True)
-        val_data = MeshTrainDataset(val_infile, nview_len=n_views, ann_ones_based=True)
+        train_data = MeshTrainDataset(train_infile, nview_len=n_views, ann_ones_based=True, RNN=False)
+        val_data = MeshTrainDataset(val_infile, nview_len=n_views, ann_ones_based=True,  RNN=False)
 
     datasets = {'train' : train_data, 'val': val_data}
-    bShuffle = False
+    bShuffle = True
     num_workers = 16
     dataloaders_top = setup_dataloaders(datasets, batchsize_top, bShuffle, num_workers)
     dataloaders_all = setup_dataloaders(datasets, batchsize_all, bShuffle, num_workers)

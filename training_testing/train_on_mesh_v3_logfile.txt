@@ -1,0 +1,4 @@
+epoch	0	phase	train	Loss	0.8272	Acc	0.7795
+epoch	0	phase	val	Loss	0.5734	Acc	0.8366
+epoch	1	phase	train	Loss	0.1702	Acc	0.9642
+epoch	1	phase	val	Loss	0.4472	Acc	0.8693
