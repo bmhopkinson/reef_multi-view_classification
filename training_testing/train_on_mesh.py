@@ -7,12 +7,13 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.optim import lr_scheduler
 import torchvision
-from meshtrain_dataset import MeshTrainDataset
-from nviewnet_v2 import nViewNet
+from meshtrain_dataset import MeshTrainDataset, MeshTrainDataset_RNN
+from nviewnet_v2 import nViewNet_RNN, nViewNet
 from rn152 import RN152
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from helper import count_parameters
+import itertools
 
 """
 nViewNet
@@ -43,30 +44,34 @@ Typical training occurs in two phases
 # nViewNet Configurations
 #
 
-model_to_train = "nViewNet"  # choices are 'ResNet152' , 'nViewNet', 'nViewNet_resume'
+model_to_train = 'nViewNet_RNN'  # choices are 'ResNet152' , 'nViewNet',  'nViewNet_RNN', 'nViewNet_resume'
 model_dir = "models"
 
-pretrained_resnet_file = "ResNet152_trained.torch"   # need pretrained weights for nViewNet "nViewNet_ResNet152_Initial_Weights.torch"
-resume_nViewNet_file = "nViewNet-8.torch"  #if model_to_train == nViewNet_resume specify file name here
+pretrained_resnet_file = "ResNet152_20211112.torch"   # need pretrained weights for nViewNet "nViewNet_ResNet152_Initial_Weights.torch"
+resume_nViewNet_file = "nViewNet-8_simple_20181022.torch"  #if model_to_train == nViewNet_resume specify file name here
 
 # Experiment Parameters
-n_class = 11  # 11 for standard class set; 14 for augmented classes
-n_views = 8  # set to 8 for nViewNet-8, 4 for nViewNet-4 (or other number, though untested)
+n_class = 14  # 11 for standard class set; 14 for augmented classes
+n_views = 8  # set to 8 for nViewNet-8, 4 for nViewNet-4, etc
 
 
 # HyperParameters
 batchsize_top = 32
 batchsize_all = 16
-epochs_top = 30 # number of epochs to train the top of the model
-epochs_all = 0 # number of epochs to train the entire model
+epochs_top = 50# number of epochs to train the top of the model
+epochs_all = 0 # number of epochs to train the entire model - nViewNet => 0
 
 lr_top = 1e-4 # learning rate for training the top of your model
 lr_all = 1e-5 # learning rate to use when training the entire model
 #momentum = 0.8  #for SGD
 
 # Dataset infiles
-train_infile = './sample_data/sample_data_infile.txt'
-val_infile   = './sample_data/sample_data_infile.txt' #these should be different datasets when actually training a model
+#train_infile = 'train_infile_ML_215.txt'
+#val_infile  = 'val_infile_ML_215.txt'
+train_infile = './infiles/train_infile_20190503_small.txt'
+val_infile   = './infiles/val_infile_20190503_small.txt'
+#train_infile = './infiles/train_infile_20190503_noG4.txt'
+#val_infile   = './infiles/val_infile_20190503_noG4.txt'
 #
 # Print Configs
 
@@ -74,6 +79,8 @@ if model_to_train == "ResNet152":
     configs = "{}_LRtop_{}_LRall_{}".format(model_to_train, lr_top, lr_all)
 elif model_to_train == "nViewNet":
     configs = "{}-{}_LRtop_{}_LRall_{}".format(model_to_train, n_views, lr_top, lr_all)
+elif model_to_train == "nViewNet_RNN":
+    configs = "{}-RNN_LRtop_{}_LRall_{}".format(model_to_train, lr_top, lr_all)
 elif model_to_train == "nViewNet_resume":
     configs = "{}-{}_LRtop_{}_LRall_{}".format(model_to_train, n_views, lr_top, lr_all)
 
@@ -101,13 +108,38 @@ if use_gpu:
 else:
     device = torch.device("cpu")
 
+def collate_fn_padimg(data):
+    #{'X': np_series, 'Y': ann, 'elm': elm, 'img_fnames': img_fnames, 'len': len(image_series)}
+    batch_size = len(data)
+
+    anns = torch.tensor([x['Y'] for x in data], dtype=torch.long)
+    elms = torch.tensor([x['elm'] for x in data], dtype=torch.long)
+    img_fnames = [x['img_fnames'] for x in data]
+    img_fnames = [list(x) for x in itertools.zip_longest(*img_fnames)]
+
+    lens = [x['len'] for x in data]
+    max_len = max(lens)
+    lens = torch.tensor(lens, dtype=torch.long)
+
+    #setup image
+    img_sample = data[0]['X']
+    _, c, w, h = img_sample.shape
+    imgs = torch.zeros(batch_size, max_len, c, w, h)  #zero-padded, merged image series
+    for i, datum in enumerate(data):
+        img = datum['X']
+        n_elms = datum['len']
+        imgs[i, 0:n_elms, :, :, :] = torch.from_numpy(img)
+
+    return {'X': imgs, 'Y': anns, 'elm': elms, 'img_fnames': img_fnames, 'len': lens}
+
+
 #
 # Data Loaders and Datasets
 #
 def setup_dataloaders(dataset_dict, batch_size, bShuffle, num_workers):
     dataloaders = {}
     for key in dataset_dict:
-        dataloaders[key] = DataLoader(dataset_dict[key], batch_size = batch_size, shuffle = bShuffle, num_workers = num_workers)
+        dataloaders[key] = DataLoader(dataset_dict[key], batch_size=batch_size, shuffle=bShuffle, collate_fn= collate_fn_padimg,  num_workers=num_workers)
     return dataloaders
 #
 # Create Model
@@ -124,17 +156,27 @@ def setup_model():
         resnet_bottom = torch.load(model_loc)
         resnet_bottom = torch.nn.Sequential(*list(resnet_bottom.children())[:-1])
         model = nViewNet(base_model=resnet_bottom, num_classes=n_class, num_views = n_views)
+
+    elif model_to_train == "nViewNet_RNN":
+    # load pretrained resnet weights and then continue to train the top
+        model_loc = os.path.join(model_dir, pretrained_resnet_file)
+        resnet_bottom = torch.load(model_loc)
+        resnet_bottom = torch.nn.Sequential(*list(resnet_bottom.children())[:-1])
+        model = nViewNet_RNN(base_model=resnet_bottom, num_classes=n_class, num_views = n_views)
+
     elif model_to_train =='nViewNet_resume':
         model_loc = os.path.join(model_dir, resume_nViewNet_file)
         model = torch.load(model_loc)
 
     return model
 
-log_file = open("train_on_mesh_logfile.txt","w")
 
+log_file = open("train_on_mesh_v3_logfile.txt","w")
+# mimic structre of train_model() function here: https://pytorch.org/tutorials/beginner/transfer_learning_tutorial.html
 def train(model, dataloaders, criterion, optimizer, num_epochs, scheduler = lr_scheduler, best_acc=0):
+    first_pass = True
     for epoch in range(num_epochs):
-        for phase in ['train','val']:
+        for phase in ['train', 'val']:
             if phase == 'train':
                 model.train()
                 if scheduler:
@@ -150,11 +192,21 @@ def train(model, dataloaders, criterion, optimizer, num_epochs, scheduler = lr_s
                 image_series = batch['X'].to(device)
                 target = batch['Y'].to(device)
 
+                if model_to_train == 'nViewNet_RNN':
+                    data = (image_series, batch['len'].to(device))
+                else:
+                    data = image_series
+
+                if first_pass:
+                    print('first pass: target: {}'.format(target))
+                    print('img_files: {}'.format(batch['img_fnames']))
+                    first_pass = False
+
                 optimizer.zero_grad()
 
                 with torch.set_grad_enabled(phase =='train'):  #track gradients for backprop in training phase
-                    output = model(image_series)  # pass in image series
-                    _, preds = torch.max(output,1)
+                    output = model(data)  # pass in image series
+                    _, preds = torch.max(output, 1)
                     loss = criterion(output, target)  # evaluate loss
 
                     if phase == 'train':
@@ -184,12 +236,20 @@ def train(model, dataloaders, criterion, optimizer, num_epochs, scheduler = lr_s
 
 if __name__ == "__main__":
     #setup datasets
-    if model_to_train == "ResNet152":
-        n_views = 1
-    train_data = MeshTrainDataset(train_infile, nview_len = n_views, ann_ones_based = True )
-    val_data   = MeshTrainDataset(val_infile,   nview_len = n_views, ann_ones_based = True )
+
+
+    if model_to_train == "nViewNet_RNN":
+        train_data = MeshTrainDataset_RNN(train_infile,  ann_ones_based=True)
+        val_data = MeshTrainDataset_RNN(val_infile, ann_ones_based=True)
+
+    else:
+        if model_to_train == "ResNet152":
+            n_views = 1
+        train_data = MeshTrainDataset(train_infile, nview_len=n_views, ann_ones_based=True)
+        val_data = MeshTrainDataset(val_infile, nview_len=n_views, ann_ones_based=True)
+
     datasets = {'train' : train_data, 'val': val_data}
-    bShuffle = True
+    bShuffle = False
     num_workers = 16
     dataloaders_top = setup_dataloaders(datasets, batchsize_top, bShuffle, num_workers)
     dataloaders_all = setup_dataloaders(datasets, batchsize_all, bShuffle, num_workers)
@@ -207,12 +267,13 @@ if __name__ == "__main__":
 
     if model_to_train == "ResNet152":
         params_to_optimize_in_top = list(model.fc.parameters())
-    elif model_to_train == "nViewNet" or model_to_train == "nViewNet_resume":
+    elif model_to_train in ["nViewNet", "nViewNet_RNN", "nViewNet_resume"]:
         params_to_optimize_in_top = list(model.collapse.parameters()) + list(model.fc.parameters())
 
     for param in params_to_optimize_in_top:
         param.requires_grad = True
 
+    #optimizer_top = optim.SGD(params_to_optimize_in_top, lr=lr_top, momentum=momentum)
     optimizer_top = optim.Adam(params_to_optimize_in_top, lr = lr_top)
     #lr_scheduler_top = lr_scheduler.StepLR(optimizer_top, step_size=20, gamma=0.8)
     lr_scheduler_top = None
@@ -226,10 +287,10 @@ if __name__ == "__main__":
     print("Training All:", count_parameters(model), "Parameters")
 
     # Optimizer for Entire Network
-
+    #optimizer_all = optim.SGD(model.parameters(), lr=lr_all, momentum=momentum)
     optimizer_all = optim.Adam(model.parameters(), lr = lr_all)
     #lr_scheduler_all = lr_scheduler.StepLR(optimizer_all, step_size=10, gamma=0.8)
     lr_scheduler_all = None
     # Train on All
     b_acc = train(model, dataloaders_all, criterion, optimizer_all, epochs_all, scheduler = lr_scheduler_all, best_acc=b_acc)
-    print('Finished training top, best acc {:.4f}'.format(b_acc))
+    print('Finished training all, best acc {:.4f}'.format(b_acc))

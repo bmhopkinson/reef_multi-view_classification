@@ -41,34 +41,42 @@ class nViewNet_RNN(nn.Module):
         self.num_views = num_views
         self.first_pass = True
 
-    def forward(self, image_series):
+    def forward(self, data):
         # we run our images series through resnet and have them in a 5d tensor (batch, channels, width, height, series)
         base_images = [] # each image is (batch,channels,width,height)
+        image_series = data[0]
+        lens = data[1]
         cbatch_size = image_series.shape[0]  #size of the current batch
 
+        image_series_packed = torch.nn.utils.rnn.pack_padded_sequence(image_series, lens.to(torch.device("cpu")),
+                                                                      batch_first=True, enforce_sorted=False)
         self.base.eval()  #running means for batchnorm layers in non-trained base model - this is critical for efficient training
-        for j in range(0, cbatch_size):  #process each sequence separately (preparing for time when they may have different lengths)
-            features_sample = []
-            img_series_sample = image_series[j].float()
-            n_imgs = img_series_sample.shape[3]
-            img_series_sample = torch.unsqueeze(img_series_sample, dim=0)
-            img_series_sample_t = torch.transpose(img_series_sample, 0, 4)   #swap batch and sequence dimensions - all images in a sequence are fed into base as a pseudo-batch
-            img_series_sample_ts = torch.squeeze(img_series_sample_t)
+        # for j in range(0, cbatch_size):  #process each sequence separately (preparing for time when they may have different lengths)
+        #     features_sample = []
+        #     img_series_sample = image_series[j].float()
+        #     n_imgs = img_series_sample.shape[0]
+        #     img_series_sample = torch.unsqueeze(img_series_sample, dim=0)
+        #     img_series_sample_t = torch.transpose(img_series_sample, 0, 1)   #swap batch and sequence dimensions - all images in a sequence are fed into base as a pseudo-batch
+        #     img_series_sample_ts = torch.squeeze(img_series_sample_t)
+        #
+        #     out = self.base(img_series_sample_ts)
+        #
+        #     if j == 0:
+        #         base_images = out.reshape(1, n_imgs, -1)
+        #     else:
+        #         base_images = torch.cat([base_images, out.reshape(1, n_imgs, -1)], dim=0)
 
-            out = self.base(img_series_sample_ts)
-
-            if j == 0:
-                base_images = out.reshape(1, n_imgs, -1)
-            else:
-                base_images = torch.cat([base_images, out.reshape(1, n_imgs, -1)], dim=0)
-
-        if base_images.is_cuda:
-            device = base_images.get_device()
+        base_images_alt = self.base(image_series_packed.data)
+        base_images_alt_packed =torch.nn.utils.rnn.PackedSequence(torch.squeeze(base_images_alt), batch_sizes=image_series_packed.batch_sizes,
+                                                                  sorted_indices=image_series_packed.sorted_indices,
+                                                                  unsorted_indices=image_series_packed.unsorted_indices)
+        if base_images_alt.is_cuda:
+            device = base_images_alt.get_device()
         else:
             device = torch.device('cpu')
 
         hidden_init = (torch.randn(1, cbatch_size, 512).to(device), torch.randn(1, cbatch_size, 512).to(device))
-        out, hidden = self.collapse(base_images, hidden_init)
+        out, hidden = self.collapse(base_images_alt_packed, hidden_init)
         pooled = self.fc(hidden[0].squeeze(dim=0))
 
         return pooled
