@@ -7,7 +7,7 @@ from torch.autograd import Variable
 from torch.utils.data import DataLoader
 
 #sys.path.append('~/Documents/nViewNet/common')
-from nviewnet_v2 import nViewNet
+from nviewnet import nViewNet
 from meshtrain_dataset import MeshTrainDataset
 
 

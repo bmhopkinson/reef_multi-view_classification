@@ -6,11 +6,10 @@ import torch.optim as optim
 from torch.optim import lr_scheduler
 import torchvision
 from meshtrain_dataset import MeshTrainDataset, collate_fn_padimg
-from nviewnet_v2 import nViewNet_RNN, nViewNet
+from nviewnet import nViewNet_RNN, nViewNet
 from rn152 import RN152
 from torch.utils.data import DataLoader
 from helper import count_parameters
-import itertools
 
 """
 nViewNet
@@ -63,8 +62,6 @@ lr_all = 1e-5 # learning rate to use when training the entire model
 #momentum = 0.8  #for SGD
 
 # Dataset infiles
-#train_infile = 'train_infile_ML_215.txt'
-#val_infile  = 'val_infile_ML_215.txt'
 train_infile = './infiles/train_infile_20190503_small.txt'
 val_infile   = './infiles/val_infile_20190503_small.txt'
 #train_infile = './infiles/train_infile_RProd.txt'
@@ -122,6 +119,7 @@ def setup_model():
         pretrained_model = torchvision.models.resnet152(pretrained=True)
         resnet_bottom = torch.nn.Sequential(*list(pretrained_model.children())[:-1]) # remove last layer (fc) layer
         model = RN152(base_model=resnet_bottom, num_classes=n_class)
+
     elif model_to_train == "nViewNet":
     # load pretrained resnet weights and then continue to train the top
         model_loc = os.path.join(model_dir, pretrained_resnet_file)
@@ -203,7 +201,6 @@ def train(model, dataloaders, criterion, optimizer, num_epochs, scheduler = lr_s
 if __name__ == "__main__":
     #setup datasets
 
-
     if model_to_train == "nViewNet_RNN":
         train_data = MeshTrainDataset(train_infile,  ann_ones_based=True, RNN=True)
         val_data = MeshTrainDataset(val_infile, ann_ones_based=True, RNN=True)
@@ -227,7 +224,6 @@ if __name__ == "__main__":
 
     # Train on Top
     # Freeze bottom of model so we are only training the top linear layer
-
     for param in model.parameters():
         param.requires_grad = False
 
@@ -239,7 +235,6 @@ if __name__ == "__main__":
     for param in params_to_optimize_in_top:
         param.requires_grad = True
 
-    #optimizer_top = optim.SGD(params_to_optimize_in_top, lr=lr_top, momentum=momentum)
     optimizer_top = optim.Adam(params_to_optimize_in_top, lr = lr_top)
     #lr_scheduler_top = lr_scheduler.StepLR(optimizer_top, step_size=20, gamma=0.8)
     lr_scheduler_top = None
@@ -253,7 +248,6 @@ if __name__ == "__main__":
     print("Training All:", count_parameters(model), "Parameters")
 
     # Optimizer for Entire Network
-    #optimizer_all = optim.SGD(model.parameters(), lr=lr_all, momentum=momentum)
     optimizer_all = optim.Adam(model.parameters(), lr = lr_all)
     #lr_scheduler_all = lr_scheduler.StepLR(optimizer_all, step_size=10, gamma=0.8)
     lr_scheduler_all = None

@@ -16,18 +16,14 @@ class nViewNet(nn.Module):
 
     def forward(self, image_series):
         # we run our images series through resnet and have them in a 5d tensor (batch, channels, width, height, series)
-        base_images = [] # each image is (batch,channels,width,height)
-        cbatch_size = image_series.shape[0]  #size of the current batch
         for i in range(0, image_series.shape[1]):
             img_features = self.base(image_series[:, i, ...].float())  # pass through base cnn feature extractor (ResNet152)
             if i == 0:
-                #base_images = im.reshape(cbatch_size,-1)  # series, width, height  are all length 1
-                base_images = torch.squeeze(img_features)
+                img_features_nviews = torch.squeeze(img_features)
             else:
-                #base_images = torch.cat([base_images, im.reshape(cbatch_size,-1)], dim=1)  # concat in 2nd dim - channels dimension
-                base_images = torch.cat([base_images, torch.squeeze(img_features)],
+                img_features_nviews = torch.cat([img_features_nviews, torch.squeeze(img_features)],
                                         dim=1)  # concat in 2nd dim - channels dimension
-        pooled = self.collapse(base_images)
+        pooled = self.collapse(img_features_nviews)
         pooled = self.fc(pooled)
         return pooled
         
